@@ -48,6 +48,7 @@ lazy_static! {
             ("roots", &fn_roots),
             ("heads", &fn_heads),
             ("branches", &fn_branches),
+            ("remotes", &fn_remotes),
             ("main", &fn_main),
             ("public", &fn_public),
             ("draft", &fn_draft),
@@ -242,6 +243,61 @@ fn fn_branches(ctx: &mut Context, name: &str, args: &[Expr], _: &Option<&CommitS
     )?;
 
     Ok(branch_commits)
+}
+
+#[instrument]
+fn fn_remotes(ctx: &mut Context, name: &str, args: &[Expr], _: &Option<&CommitSet>) -> EvalResult {
+    let remote_branch_oid_to_names = ctx
+        .repo
+        .get_remote_branch_oid_to_names()
+        .wrap_err("Could not get remote branches for repo")
+        .map_err(EvalError::OtherError)?;
+    let remote_branch_commits: CommitSet = remote_branch_oid_to_names.keys().copied().collect();
+
+    // NB: unlike local branches, remote-tracking branches are not used as heads
+    // when the DAG is built, so their commits may be absent from it entirely.
+    // Sync them in before querying, or range queries below will not see them.
+    ctx.dag
+        .sync_from_oids(
+            ctx.effects,
+            ctx.repo,
+            CommitSet::empty(),
+            remote_branch_commits.clone(),
+        )
+        .map_err(EvalError::OtherError)?;
+
+    let pattern = match eval0_or_1_pattern(ctx, name, args)? {
+        Some(pattern) => pattern,
+        None => return Ok(remote_branch_commits),
+    };
+
+    make_pattern_matcher(
+        ctx,
+        name,
+        args,
+        Box::new(move |_repo, commit| {
+            let branches_at_commit = match remote_branch_oid_to_names.get(&commit.get_oid()) {
+                Some(branches) => branches,
+                None => return Ok(false),
+            };
+
+            let result = branches_at_commit
+                .iter()
+                .filter_map(
+                    |branch_name| match CategorizedReferenceName::new(branch_name) {
+                        name @ CategorizedReferenceName::RemoteBranch { .. } => {
+                            Some(name.render_suffix())
+                        }
+                        CategorizedReferenceName::LocalBranch { .. }
+                        | CategorizedReferenceName::OtherRef { .. } => None,
+                    },
+                )
+                .any(|branch_name| pattern.matches_text(branch_name.as_str()));
+
+            Ok(result)
+        }),
+        &Some(&remote_branch_commits.clone()),
+    )
 }
 
 #[instrument]

@@ -39,6 +39,15 @@ pub trait RepoExt {
     /// be stripped if desired.
     fn get_branch_oid_to_names(&self) -> eyre::Result<HashMap<NonZeroOid, HashSet<ReferenceName>>>;
 
+    /// Get a mapping from OID to the names of remote-tracking branches which
+    /// point to that OID.
+    ///
+    /// The returned branch names include the `refs/remotes/` prefix, so it must
+    /// be stripped if desired.
+    fn get_remote_branch_oid_to_names(
+        &self,
+    ) -> eyre::Result<HashMap<NonZeroOid, HashSet<ReferenceName>>>;
+
     /// Get the positions of references in the repository.
     fn get_references_snapshot(&self) -> eyre::Result<RepoReferencesSnapshot>;
 
@@ -103,6 +112,27 @@ https://github.com/arxanas/git-branchless/discussions/595 for more details.",
             let reference_name = reference.get_name()?;
             let reference_info = self.resolve_reference(&reference)?;
             if let Some(reference_oid) = reference_info.oid {
+                result
+                    .entry(reference_oid)
+                    .or_default()
+                    .insert(reference_name);
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn get_remote_branch_oid_to_names(
+        &self,
+    ) -> eyre::Result<HashMap<NonZeroOid, HashSet<ReferenceName>>> {
+        let mut result: HashMap<NonZeroOid, HashSet<ReferenceName>> = HashMap::new();
+        for branch in self.get_all_remote_branches()? {
+            let reference = branch.into_reference();
+            let reference_name = reference.get_name()?;
+            // NB: use the direct target so that symbolic refs such as
+            // `refs/remotes/origin/HEAD` are skipped rather than duplicating
+            // whichever branch they alias.
+            if let Some(reference_oid) = reference.get_target() {
                 result
                     .entry(reference_oid)
                     .or_default()

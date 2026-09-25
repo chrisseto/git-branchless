@@ -1139,6 +1139,24 @@ impl Repo {
         Ok(all_branches)
     }
 
+    /// Get all remote-tracking branches in the repository.
+    #[instrument]
+    pub fn get_all_remote_branches(&self) -> Result<Vec<Branch<'_>>> {
+        let mut all_branches = Vec::new();
+        for branch in self
+            .inner
+            .branches(Some(git2::BranchType::Remote))
+            .map_err(Error::GetBranches)?
+        {
+            let (branch, _branch_type) = branch.map_err(Error::ReadBranch)?;
+            all_branches.push(Branch {
+                repo: self,
+                inner: branch,
+            });
+        }
+        Ok(all_branches)
+    }
+
     /// Look up the branch with the given name. Returns `None` if not found.
     #[instrument]
     pub fn find_branch(&self, name: &str, branch_type: BranchType) -> Result<Option<Branch<'_>>> {

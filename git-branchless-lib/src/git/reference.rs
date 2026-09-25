@@ -107,6 +107,18 @@ impl<'repo> Reference<'repo> {
         let name = ReferenceName::from_bytes(self.inner.name_bytes().to_vec())?;
         Ok(name)
     }
+
+    /// Get the OID which this reference points to directly, without peeling
+    /// annotated tags or resolving symbolic references. Returns `None` for
+    /// symbolic references.
+    #[instrument]
+    pub fn get_target(&self) -> Option<NonZeroOid> {
+        match self.inner.target() {
+            Some(oid) if !oid.is_zero() => Some(make_non_zero_oid(oid)),
+            _ => None,
+        }
+    }
+
     /// Get the commit object pointed to by this reference. Returns `None` if
     /// the object pointed to by the reference is a different kind of object.
     #[instrument]

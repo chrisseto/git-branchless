@@ -1419,6 +1419,112 @@ mod tests {
     }
 
     #[test]
+    fn test_eval_remotes_with_pattern() -> eyre::Result<()> {
+        let git = make_git()?;
+        git.init_repo()?;
+
+        git.detach_head()?;
+        let test1_oid = git.commit_file("test1", 1)?;
+        let test2_oid = git.commit_file("test2", 2)?;
+
+        // Stand in for fetched remote-tracking branches. A symbolic
+        // `origin/HEAD` is included to confirm it is skipped rather than
+        // aliasing whichever branch it points at.
+        git.run(&[
+            "update-ref",
+            "refs/remotes/origin/main",
+            &test1_oid.to_string(),
+        ])?;
+        git.run(&[
+            "update-ref",
+            "refs/remotes/origin/release/1.0",
+            &test2_oid.to_string(),
+        ])?;
+        git.run(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ])?;
+
+        let effects = Effects::new_suppress_for_test(Glyphs::text());
+        let repo = git.get_repo()?;
+        let conn = repo.get_db_conn()?;
+        let event_log_db = EventLogDb::new(&conn)?;
+        let event_replayer = EventReplayer::from_event_log_db(&effects, &repo, &event_log_db)?;
+        let event_cursor = event_replayer.make_default_cursor();
+        let references_snapshot = repo.get_references_snapshot()?;
+        let mut dag = Dag::open_and_sync(
+            &effects,
+            &repo,
+            &event_replayer,
+            event_cursor,
+            &references_snapshot,
+        )?;
+
+        {
+            let expr = Expr::FunctionCall(Cow::Borrowed("remotes"), vec![]);
+            insta::assert_debug_snapshot!(eval_and_sort(&effects, &repo, &mut dag, &expr), @r#"
+            Ok(
+                [
+                    Commit {
+                        inner: Commit {
+                            id: 62fc20d2a290daea0d52bdc2ed2ad4be6491010e,
+                            summary: "create test1.txt",
+                        },
+                    },
+                    Commit {
+                        inner: Commit {
+                            id: 96d1c37a3d4363611c49f7e52186e189a04c531f,
+                            summary: "create test2.txt",
+                        },
+                    },
+                ],
+            )
+            "#);
+
+            let expr = Expr::FunctionCall(
+                Cow::Borrowed("remotes"),
+                vec![Expr::Name(Cow::Borrowed("glob:*/release/*"))],
+            );
+            insta::assert_debug_snapshot!(eval_and_sort(&effects, &repo, &mut dag, &expr), @r#"
+            Ok(
+                [
+                    Commit {
+                        inner: Commit {
+                            id: 96d1c37a3d4363611c49f7e52186e189a04c531f,
+                            summary: "create test2.txt",
+                        },
+                    },
+                ],
+            )
+            "#);
+
+            // Symbolic refs such as `origin/HEAD` are skipped.
+            let expr = Expr::FunctionCall(
+                Cow::Borrowed("remotes"),
+                vec![Expr::Name(Cow::Borrowed("glob:*/HEAD"))],
+            );
+            insta::assert_debug_snapshot!(eval_and_sort(&effects, &repo, &mut dag, &expr), @r"
+            Ok(
+                [],
+            )
+            ");
+
+            // `branches()` must not pick up remote-tracking branches.
+            let expr = Expr::FunctionCall(
+                Cow::Borrowed("branches"),
+                vec![Expr::Name(Cow::Borrowed("glob:*/release/*"))],
+            );
+            insta::assert_debug_snapshot!(eval_and_sort(&effects, &repo, &mut dag, &expr), @r"
+            Ok(
+                [],
+            )
+            ");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_eval_aliases() -> eyre::Result<()> {
         let git = make_git()?;
         git.init_repo()?;

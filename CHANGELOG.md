@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `remotes()` revset function, matching commits pointed to by remote-tracking branches. Mirrors `branches()`, which only ever matched local branches; the pattern is matched against the name with the `refs/remotes/` prefix stripped, e.g. `remotes('glob:*/release/*')`.
+
 ### Changed
 
 ### Fixed
